@@ -7,7 +7,8 @@ CREATE TYPE bchydro.outage_status AS ENUM ('PLANNED', 'CURRENT', 'RESTORED');
 CREATE TABLE bchydro.outages (
     id TEXT NOT NULL PRIMARY KEY,
     was_planned BOOLEAN NOT NULL DEFAULT FALSE,
-    stale_since timestamptz DEFAULT NULL
+    stale_since timestamptz DEFAULT NULL,
+    last_notified_update INT DEFAULT NULL
 );
 
 CREATE TABLE bchydro.outage_updates (
@@ -64,10 +65,10 @@ WITH outage_aggregate AS (
         max(update_index) AS most_recent_update_index,
         min(first_scrape_ts) AS outage_first_scrape_ts,
         max(last_scrape_ts) AS outage_last_scrape_ts,
-        range_merge(range_agg(data_period)) AS outage_data_period,
+        range_merge(range_agg(data_period)) AS outage_data_period_range,
         min(bch_first_updated) AS outage_bch_first_updated,
         max(bch_last_updated) AS outage_bch_last_updated,
-        range_merge(range_agg(bch_period)) AS outage_bch_period
+        range_merge(range_agg(bch_period)) AS outage_bch_period_range
     FROM bchydro.outages o
     JOIN bchydro.outage_updates u USING (id)
     GROUP BY id
@@ -80,18 +81,22 @@ SELECT DISTINCT
     most_recent_update_index,
     outage_first_scrape_ts,
     outage_last_scrape_ts,
-    outage_data_period,
+    outage_last_scrape_ts - outage_first_scrape_ts AS outage_data_period,
+    outage_data_period_range,
     outage_bch_first_updated,
     outage_bch_last_updated,
-    outage_bch_period,
+    outage_bch_last_updated - outage_bch_first_updated AS outage_bch_period,
+    outage_bch_period_range,
 
     first_value(update_index) OVER (PARTITION BY id ORDER BY update_index DESC) AS this_scrape_update_index,
     first_value(first_scrape_ts) OVER (PARTITION BY id ORDER BY update_index DESC) AS this_scrape_first_scrape_ts,
     first_value(last_scrape_ts) OVER (PARTITION BY id ORDER BY update_index DESC) AS this_scrape_last_scrape_ts,
-    first_value(data_period) OVER (PARTITION BY id ORDER BY update_index DESC) AS this_scrape_data_period,
+    first_value(last_scrape_ts) OVER (PARTITION BY id ORDER BY update_index DESC) - first_value(first_scrape_ts) OVER (PARTITION BY id ORDER BY update_index DESC) AS this_scrape_data_period,
+    first_value(data_period) OVER (PARTITION BY id ORDER BY update_index DESC) AS this_scrape_data_period_range,
     first_value(bch_first_updated) OVER (PARTITION BY id ORDER BY update_index DESC) AS this_scrape_bch_first_updated,
     first_value(bch_last_updated) OVER (PARTITION BY id ORDER BY update_index DESC) AS this_scrape_bch_last_updated,
-    first_value(bch_period) OVER (PARTITION BY id ORDER BY update_index DESC) AS this_scrape_bch_period,
+    first_value(bch_last_updated) OVER (PARTITION BY id ORDER BY update_index DESC) - first_value(bch_first_updated) OVER (PARTITION BY id ORDER BY update_index DESC) AS this_scrape_bch_period,
+    first_value(bch_period) OVER (PARTITION BY id ORDER BY update_index DESC) AS this_scrape_bch_period_range,
 
     first_value(status) OVER (PARTITION BY id ORDER BY CASE WHEN status IS NULL THEN -1 ELSE update_index END DESC) AS status,
     first_value(analyzed_status) OVER (PARTITION BY id ORDER BY CASE WHEN analyzed_status IS NULL THEN -1 ELSE update_index END DESC) AS analyzed_status,
